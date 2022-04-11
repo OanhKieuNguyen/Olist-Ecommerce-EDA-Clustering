@@ -1,0 +1,153 @@
+AdventureWorks dataset
+
+-- Tính return rate theo từng sản phẩm
+WITH sales as 
+(
+    select ProductKey, OrderQuantity from `practice-kieu.AdventureWorks.Sales_2016`
+        union all select ProductKey, OrderQuantity from `practice-kieu.AdventureWorks.Sales_2017`
+)
+
+select p.ProductKey, p.ProductName, su.SubcategoryName
+        , coalesce(sum(r.ReturnQuantity),0) as Total_ReturnQty , coalesce(sum(s.OrderQuantity),0) as Total_OrderQty, coalesce(round((sum(r.ReturnQuantity)/sum(s.OrderQuantity))*100,2),0) as Returnrate
+    FROM sales s 
+    left join `practice-kieu.AdventureWorks.Returns` r on s.ProductKey = r.ProductKey
+    left join `practice-kieu.AdventureWorks.Products` p on p.ProductKey = s.ProductKey
+    join `practice-kieu.AdventureWorks.Product_Subcategories` su on su.ProductSubcategoryKey = p.ProductSubcategoryKey
+group by 1, 2, 3
+order by 6
+
+-- Tính total customer order by country in 2017
+select t.Country, count(s.OrderNumber) as Total_customer_order
+    from `practice-kieu.AdventureWorks.Sales_2017` s
+    left join `practice-kieu.AdventureWorks.Territories` t on s.TerritoryKey = t.SalesTerritoryKey
+group by 1
+order by 2 desc
+
+-- Highest order value of Jul to Dec 2017
+select distinct max(order_value) as max_value
+from
+(
+select s.OrderNumber, sum(s.OrderQuantity*p.ProductPrice) as order_value
+    from `practice-kieu.AdventureWorks.Sales_2017` s
+    join `practice-kieu.AdventureWorks.Products` p on s.ProductKey = p.ProductKey
+where s.OrderDate between '2017-01-01' and '2017-06-30'
+group by 1
+)
+
+-- Count no. of customer by country from 2015 to 2017
+with sales as 
+(
+    select * from `practice-kieu.AdventureWorks.Sales_2015`
+        union all select * from `practice-kieu.AdventureWorks.Sales_2016`
+        union all select * from `practice-kieu.AdventureWorks.Sales_2017`
+)
+
+select t.Country, count(s.CustomerKey) as No_customer
+    from `practice-kieu.AdventureWorks.Territories` t
+    left join sales s on t.SalesTerritoryKey = s.TerritoryKey
+    left join `practice-kieu.AdventureWorks.Customers` c on c.CustomerKey = s.CustomerKey
+group by 1
+order by 2 desc
+
+-- Count no. of customer by country in 2017
+select t.Country, count(s.CustomerKey) as No_customer
+    from `practice-kieu.AdventureWorks.Territories` t
+    left join `practice-kieu.AdventureWorks.Sales_2017` s on t.SalesTerritoryKey = s.TerritoryKey
+    left join `practice-kieu.AdventureWorks.Customers` c on c.CustomerKey = s.CustomerKey
+group by 1
+order by 2 desc
+
+-- Average no. of order and total sales each day in Jun 2017
+select date(s.OrderDate) as Jun_date,
+        count (s.OrderNumber) as No_order,
+        sum(s.OrderQuantity*p.ProductPrice) as avg_sale
+    from `practice-kieu.AdventureWorks.Sales_2017` s 
+    left join `practice-kieu.AdventureWorks.Products` p on p.ProductKey = s.ProductKey
+where s.OrderDate between '2017-06-01' and '2017-06-30'
+group by 1
+order by 1
+
+-- On what day customers tend to do online puchasing (Mon, Tue....) - Year 2017
+select format_date('%A',date(OrderDate)) as Day_of_week,
+        count(OrderNumber) as No_order
+    from `practice-kieu.AdventureWorks.Sales_2017`
+group by 1
+order by 2 desc
+
+-- How many customers who made transaction from Jan to Jun 2017 and repurchased in next following month
+with temp as (
+    select date_trunc(OrderDate,month) as month_purchase,CustomerKey
+        from `practice-kieu.AdventureWorks.Sales_2017`
+    where OrderDate between '2017-01-01' and '2017-07-31'
+)
+
+select t1.month_purchase,
+        count(distinct t1.CustomerKey) as No_cus_current_month,
+        count(distinct t2.CustomerKey) as No_cus_next_month,
+        round(count(distinct t2.CustomerKey)/count(distinct t1.CustomerKey),4)*100 as retention_rate
+    from temp t1
+    left join temp t2 on t1.CustomerKey = t2.CustomerKey
+        and t1.month_purchase = date_sub(t2.month_purchase,interval 1 month)
+    where t1.month_purchase between '2017-01-01' and '2017-06-30'
+group by 1
+
+-- How many customers who just buy items of Bikes but never make transation of any other categories
+with cus_cat as (
+select s.CustomerKey, pc.CategoryName,
+        case when pc.CategoryName = 'Bikes' then 0 else 1 end as cat_type
+    from `practice-kieu.AdventureWorks.Sales_2017` s
+    join `practice-kieu.AdventureWorks.Products` p on p.ProductKey = s.ProductKey
+    join `practice-kieu.AdventureWorks.Product_Subcategories` ps on ps.ProductSubcategoryKey = p.ProductSubcategoryKey
+    join `practice-kieu.AdventureWorks.Product_Categories` pc on ps.ProductCategoryKey = pc.ProductCategoryKey
+)
+,temp as(
+select CustomerKey, CategoryName, sum(cat_type) as label
+    from cus_cat
+group by 1,2
+)
+
+select count(CustomerKey)
+    from temp
+where label =0
+
+-- Cohort Retention (2017)
+with month_user_join as (
+    select CustomerKey,
+            date_trunc(min(OrderDate),month) as new_month
+        from `practice-kieu.AdventureWorks.Sales_2017`
+    group by 1
+    order by 1,2
+),
+cohort_size as(
+select new_month,
+        count(distinct CustomerKey) as No_new_customer
+    from month_user_join
+group by 1
+),
+next_purchasing_next as(
+    select s.CustomerKey,
+        date_diff(date(date_trunc(s.OrderDate,month)),date(m.new_month),month) as month_number
+    from `practice-kieu.AdventureWorks.Sales_2017` s
+    join month_user_join m on m.CustomerKey = s.CustomerKey
+group by 1,2
+order by 2 desc
+),
+final_raw as(
+    select m.new_month,
+        n.month_number,
+        count(distinct m.CustomerKey) as num_customer
+    from month_user_join m
+    join next_purchasing_next n on n.CustomerKey = m.CustomerKey
+group by 1,2
+order by 1,2
+)
+
+select f.new_month,
+        f.month_number,
+        f.num_customer,
+        h.No_new_customer,
+        f.num_customer/h.No_new_customer*100 as percentage
+    from final_raw f
+    left join cohort_size h on h.new_month = f.new_month
+group by 1,2,3,4
+order by 1,2
